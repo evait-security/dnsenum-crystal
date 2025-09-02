@@ -1,0 +1,30 @@
+# Crystal
+.crystal/
+/bin/
+/lib/
+/pkg/
+/tmp/
+output.txt
+
+# Dependencies
+shard.lock
+
+# Editor-specific files
+.DS_Store
+.vscode/
+.idea/
+
+# OS-specific files
+*.swp
+*.swo
+*~
+*.bak
+*.orig
+*.rej
+*.log
+*.cache
+*.sublime-project
+*.sublime-workspace
+
+# Custom ignores
+bin/dnsenum

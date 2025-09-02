@@ -1,0 +1,42 @@
+name: Release Hash Sentinel Binary
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build_and_release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🛎️ Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Crystal
+        uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: latest
+
+      - name: 📦 Install Dependencies
+        run: shards install
+
+      - name: 🚀 Build Binary
+        run: crystal build --release src/dnsenum-crystal.cr -o dnsenum
+
+      - name: ✨ Prepare Release Tag
+        id: prepare_tag
+        run: |
+          echo "TAG_NAME=latest" >> $GITHUB_OUTPUT
+
+      - name: 🚢 Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.prepare_tag.outputs.TAG_NAME }}
+          name: Release ${{ steps.prepare_tag.outputs.TAG_NAME }}
+          draft: false
+          prerelease: false
+          files: |
+            dnsenum
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

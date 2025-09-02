@@ -1,27 +1,44 @@
 # dnsenum-crystal
 
-TODO: Write a description here
+`dnsenum-crystal` is a modern, high-performance reimagining of the infamous `dnsenum` tool, rewritten from the ground up in Crystal. While the original `dnsenum` served its purpose, its reliance on Perl makes it feel increasingly outdated in today's development landscape.
 
-## Installation
+This project aims to provide the same powerful DNS enumeration capabilities with the speed, type safety, and modern development experience that Crystal offers.
 
-TODO: Write installation instructions here
+## Features (Planned/Current)
+
+-   **Fast:** Leveraging Crystal's native compilation for blazing-fast execution.
+-   **Modern:** Built with a contemporary language and ecosystem.
+-   **Familiar:** Retains the core functionality and spirit of the original `dnsenum`.
 
 ## Usage
 
-TODO: Write usage instructions here
+```bash
+dnsenum [options] <domain>
+```
 
-## Development
+**Options:**
 
-TODO: Write development instructions here
+*   `--dnsserver server`: Specify a DNS server to use for queries
+*   `--enum`: Perform a full enumeration (A, NS, MX, Zone Transfer, Reverse Lookup, WHOIS)
+*   `--noreverse`: Skip reverse DNS lookups
+*   `--threads n`: Set the number of threads (default: 10)
+*   `-v`, `--verbose`: Enable verbose mode
+*   `-o file`, `--output file`: Specify the output file
+*   `-h`, `--help`: Show this help message
+*   `--version`: Show version information
 
-## Contributing
+**Example:**
 
-1. Fork it (<https://github.com/your-github-user/dnsenum-crystal/fork>)
-2. Create your feature branch (`git checkout -b my-new-feature`)
-3. Commit your changes (`git commit -am 'Add some feature'`)
-4. Push to the branch (`git push origin my-new-feature`)
-5. Create a new Pull Request
+```bash
+dnsenum -v --threads 20 example.com
+dnsenum example.com
+```
 
-## Contributors
+## Installation
 
-- [Paul Werther](https://github.com/your-github-user) - creator and maintainer
+```bash
+wget https://github.com/evait-security/dnsenum-crystal/releases/download/latest/dnsenum
+chmod +x dnsenum
+
+./dnsenum
+```
