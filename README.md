@@ -36,9 +36,20 @@ dnsenum example.com
 
 ## Installation
 
+### Pre-Compiled
+
 ```bash
 wget https://github.com/evait-security/dnsenum-crystal/releases/download/latest/dnsenum
 chmod +x dnsenum
 
 ./dnsenum
+```
+
+### Build from source
+
+```bash
+# git clone repo
+cd dnsenum-crystal
+shards build
+bin/dnsenum example.com
 ```
