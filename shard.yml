@@ -2,7 +2,7 @@ name: dnsenum-crystal
 version: 0.1.0
 
 authors:
-  - Paul Werther <pw@evait.de>
+  - FLX <flx@evait.de>
 
 targets:
   dnsenum:
