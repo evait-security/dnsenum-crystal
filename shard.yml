@@ -1,0 +1,19 @@
+name: dnsenum-crystal
+version: 0.1.0
+
+authors:
+  - Paul Werther <pw@evait.de>
+
+targets:
+  dnsenum:
+    main: src/dnsenum-crystal.cr
+
+crystal: '>= 1.16.3'
+
+license: MIT
+
+dependencies:
+  dns:
+    github: spider-gazelle/dns
+  
+  
