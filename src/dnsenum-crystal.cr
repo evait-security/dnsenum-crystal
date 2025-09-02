@@ -184,85 +184,163 @@ module Dnsenum
 
     def perform_zone_transfer(ns_servers : Array(String))
       puts "\n--- Zone Transfer (AXFR) ---"
-      ns_servers.each do |ns_server|
-        puts "Attempting zone transfer from #{ns_server}..."
-        begin
-          # Temporarily set default resolver to system resolver for NS IP resolution
-          original_resolver = DNS.default_resolver
-          DNS.default_resolver = DNS::Resolver::System.new
+      return if ns_servers.empty?
 
-          ns_ip_responses = DNS.query(ns_server, [DNS::RecordType::A])
+      # Concurrency to speed up overall AXFR attempts
+      worker_count = threads > 0 ? threads : 1
+      jobs = Channel(String).new
+      done = Channel(Nil).new
 
-          # Restore original resolver
-          DNS.default_resolver = original_resolver
-          if ns_ip_responses.empty?
-            puts "Could not resolve IP for #{ns_server}. Skipping zone transfer." if verbose
-            next
-          end
-          ns_ip = ns_ip_responses.first.ip_address.address
-          puts "Resolved #{ns_server} to #{ns_ip}" if verbose
-
+      worker_count.times do
+        spawn do
           begin
-            socket = TCPSocket.new(ns_ip, 53)
-            puts "Connected to #{ns_ip}:53" if verbose
-
-            # Construct AXFR query
-            query_id = Random.rand(65535).to_u16 # Random 16-bit ID
-            question = DNS::Packet::Question.new(domain, 252_u16, DNS::ClassCode::Internet.value)
-            packet = DNS::Packet.new(
-              id: query_id,
-              operation_code: DNS::OpCode::QUERY,
-              recursion_desired: true,
-              questions: [question]
-            )
-
-            query_bytes = packet.to_slice
-            # Prepend length (2 bytes)
-            length_io = IO::Memory.new
-            length_io.write_bytes(query_bytes.size.to_u16, IO::ByteFormat::BigEndian)
-            length_bytes = length_io.to_slice
-            socket.write(length_bytes)
-            socket.write(query_bytes)
-            puts "Sent AXFR query for #{domain} to #{ns_ip}" if verbose
-
             loop do
-              # Read 2-byte length
-              length_bytes = Bytes.new(2)
-              bytes_read = socket.read(length_bytes)
-              break if bytes_read == 0 # Connection closed
-
-              message_length = IO::Memory.new(length_bytes).read_bytes(UInt16, IO::ByteFormat::BigEndian)
-              if message_length == 0
-                puts "Received empty message length. Closing connection." if verbose
-                break
-              end
-
-              # Read DNS message
-              message_bytes = Bytes.new(message_length)
-              socket.read_fully(message_bytes)
-
-              # Parse DNS message
-              begin
-                response_packet = DNS::Packet.from_slice(message_bytes)
-                response_packet.answers.each do |answer|
-                  if answer.record_type == DNS::RecordType::MX
-                    mx = answer.resource.as(DNS::Resource::MX)
-                    puts "  #{answer.name} MX #{mx.exchange} (preference: #{mx.preference})"
-                  else
-                    puts "  #{answer.name} #{answer.record_type} #{answer.resource}"
-                  end
-                end
-              rescue ex
-                puts "Error parsing DNS response: #{ex.message}" if verbose
-              end
+              ns_server = jobs.receive
+              zone_transfer_from(ns_server)
             end
-            socket.close
-          rescue ex
-            puts "Error connecting to #{ns_ip}:53: #{ex.message}" if verbose
+          rescue Channel::ClosedError
+            # finished
+          ensure
+            done.send(nil)
           end
-        rescue ex
-          puts "Error resolving IP for #{ns_server}: #{ex.message}. Skipping zone transfer." if verbose
         end
+      end
+
+      ns_servers.each { |ns| jobs.send(ns) }
+      jobs.close
+
+      # Wait for all workers to finish before moving to next section
+      worker_count.times { done.receive }
+    end
+
+    # Faster AXFR with conservative timeouts
+    private def zone_transfer_from(ns_server : String)
+      connect_timeout = 2.seconds
+      read_timeout    = 2.seconds
+      idle_timeout    = 3.seconds
+
+      puts "Attempting zone transfer from #{ns_server}..."
+      begin
+        # Resolve NS to IP without modifying global resolver
+        addrinfos = Socket::Addrinfo.resolve(ns_server, 53, Socket::Family::UNSPEC, Socket::Type::STREAM)
+        if addrinfos.empty?
+          puts "Could not resolve IP for #{ns_server}. Skipping zone transfer." if verbose
+          return
+        end
+        ns_ip = addrinfos.first.ip_address.address
+        puts "Resolved #{ns_server} to #{ns_ip}" if verbose
+
+        socket = connect_with_timeout(ns_ip, 53, connect_timeout)
+        unless socket
+          puts "Connect timeout to #{ns_ip}:53 after #{connect_timeout.total_seconds}s" if verbose
+          return
+        end
+
+        begin
+          # Set short IO timeouts so we don't wait too long for partial/slow transfers
+          begin
+            socket.read_timeout = read_timeout
+            socket.write_timeout = read_timeout
+          rescue
+            # If not supported, continue without explicit IO timeouts
+          end
+
+          # Construct AXFR query
+          query_id = Random.rand(65535).to_u16 # Random 16-bit ID
+          question = DNS::Packet::Question.new(domain, 252_u16, DNS::ClassCode::Internet.value)
+          packet = DNS::Packet.new(
+            id: query_id,
+            operation_code: DNS::OpCode::QUERY,
+            recursion_desired: true,
+            questions: [question]
+          )
+
+          query_bytes = packet.to_slice
+          # Prepend length (2 bytes)
+          length_io = IO::Memory.new
+          length_io.write_bytes(query_bytes.size.to_u16, IO::ByteFormat::BigEndian)
+          length_bytes = length_io.to_slice
+          socket.write(length_bytes)
+          socket.write(query_bytes)
+          puts "Sent AXFR query for #{domain} to #{ns_ip}" if verbose
+
+          last_data_at = Time.monotonic
+          loop do
+            # Enforce idle timeout between messages
+            if Time.monotonic - last_data_at > idle_timeout
+              puts "Idle timeout while waiting for AXFR data from #{ns_ip}" if verbose
+              break
+            end
+
+            # Read 2-byte length (may timeout)
+            length_bytes = Bytes.new(2)
+            bytes_read = 0
+            begin
+              bytes_read = socket.read(length_bytes)
+            rescue ex
+              puts "Read error from #{ns_ip}: #{ex.message}" if verbose
+              break
+            end
+            break if bytes_read == 0 # Connection closed
+
+            last_data_at = Time.monotonic
+            message_length = IO::Memory.new(length_bytes).read_bytes(UInt16, IO::ByteFormat::BigEndian)
+            if message_length == 0
+              puts "Received empty message length. Closing connection." if verbose
+              break
+            end
+
+            # Read DNS message (may timeout)
+            message_bytes = Bytes.new(message_length)
+            begin
+              socket.read_fully(message_bytes)
+              last_data_at = Time.monotonic
+            rescue ex
+              puts "Read error while receiving AXFR message from #{ns_ip}: #{ex.message}" if verbose
+              break
+            end
+
+            # Parse DNS message
+            begin
+              response_packet = DNS::Packet.from_slice(message_bytes)
+              response_packet.answers.each do |answer|
+                if answer.record_type == DNS::RecordType::MX
+                  mx = answer.resource.as(DNS::Resource::MX)
+                  puts "  #{answer.name} MX #{mx.exchange} (preference: #{mx.preference})"
+                else
+                  puts "  #{answer.name} #{answer.record_type} #{answer.resource}"
+                end
+              end
+            rescue ex
+              puts "Error parsing DNS response: #{ex.message}" if verbose
+            end
+          end
+        ensure
+          begin
+            socket.close
+          rescue
+            # ignore
+          end
+        end
+      rescue ex
+        puts "Error resolving IP for #{ns_server}: #{ex.message}. Skipping zone transfer." if verbose
+      end
+    end
+
+    private def connect_with_timeout(host : String, port : Int32, tmo : Time::Span) : TCPSocket?
+      ch = Channel(TCPSocket | Nil).new
+      spawn do
+        begin
+          ch.send(TCPSocket.new(host, port))
+        rescue
+          ch.send(nil)
+        end
+      end
+      select
+      when sock = ch.receive
+        sock.as?(TCPSocket)
+      when timeout(tmo)
+        nil
       end
     end
 
